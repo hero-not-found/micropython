@@ -32,6 +32,7 @@
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
 #include "hal/gpio_ll.h"
+#include "esp_sleep.h"
 
 #include "py/runtime.h"
 #include "py/mphal.h"
@@ -331,19 +332,23 @@ static mp_obj_t machine_pin_irq(size_t n_args, const mp_obj_t *pos_args, mp_map_
             }
             #endif
 
-            if (!RTC_IS_VALID_EXT_PIN(index)) {
-                mp_raise_ValueError(MP_ERROR_TEXT("invalid pin for wake"));
+            // light sleep
+            if (wake == ESP_SLEEP_WAKEUP_GPIO) {
+                gpio_wakeup_enable(index, trigger);
+                machine_rtc_config.wake_on_gpio = true;
             }
 
             #if SOC_PM_SUPPORT_EXT0_WAKEUP
-            if (machine_rtc_config.ext0_pin == -1) {
-                machine_rtc_config.ext0_pin = index;
-            } else if (machine_rtc_config.ext0_pin != index) {
-                mp_raise_ValueError(MP_ERROR_TEXT("no resources"));
-            }
+            if (wake == ESP_SLEEP_WAKEUP_EXT0) {
+                if (machine_rtc_config.ext0_pin == -1) {
+                    machine_rtc_config.ext0_pin = index;
+                } else if (machine_rtc_config.ext0_pin != index) {
+                    mp_raise_ValueError(MP_ERROR_TEXT("no resources"));
+                }
 
-            machine_rtc_config.ext0_level = trigger == GPIO_INTR_LOW_LEVEL ? 0 : 1;
-            machine_rtc_config.ext0_wake_types = wake;
+                machine_rtc_config.ext0_level = trigger == GPIO_INTR_LOW_LEVEL ? 0 : 1;
+                machine_rtc_config.ext0_wake_types = wake;
+            }
             #endif
         } else {
             #if SOC_PM_SUPPORT_EXT0_WAKEUP
@@ -358,8 +363,10 @@ static mp_obj_t machine_pin_irq(size_t n_args, const mp_obj_t *pos_args, mp_map_
             }
             gpio_isr_handler_remove(index);
             MP_STATE_PORT(machine_pin_irq_handler)[index] = handler;
-            gpio_set_intr_type(index, trigger);
-            gpio_isr_handler_add(index, machine_pin_isr_handler, (void *)self);
+            if (handler != MP_OBJ_NULL) {
+                gpio_set_intr_type(index, trigger);
+                gpio_isr_handler_add(index, machine_pin_isr_handler, (void *)self);
+            }
         }
     }
 
@@ -401,6 +408,8 @@ static const mp_rom_map_elem_t machine_pin_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_DRIVE_1), MP_ROM_INT(GPIO_DRIVE_CAP_1) },
     { MP_ROM_QSTR(MP_QSTR_DRIVE_2), MP_ROM_INT(GPIO_DRIVE_CAP_2) },
     { MP_ROM_QSTR(MP_QSTR_DRIVE_3), MP_ROM_INT(GPIO_DRIVE_CAP_3) },
+    { MP_ROM_QSTR(MP_QSTR_WAKEUP_GPIO), MP_ROM_INT(ESP_SLEEP_WAKEUP_GPIO) },
+    { MP_ROM_QSTR(MP_QSTR_WAKEUP_EXT0), MP_ROM_INT(ESP_SLEEP_WAKEUP_EXT0) },
 };
 
 static mp_uint_t pin_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_t arg, int *errcode) {
