@@ -50,6 +50,7 @@ typedef struct {
     #if SOC_PM_SUPPORT_EXT1_WAKEUP
     bool ext1_level : 1;
     #endif
+    bool wake_on_gpio : 1;
 } machine_rtc_config_t;
 
 extern machine_rtc_config_t machine_rtc_config;

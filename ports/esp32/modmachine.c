@@ -170,6 +170,12 @@ static void machine_sleep_helper(wake_type_t wake_type, size_t n_args, const mp_
     }
     #endif
 
+    if (machine_rtc_config.wake_on_gpio) {
+        if (esp_sleep_enable_gpio_wakeup() != ESP_OK) {
+            mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("esp_sleep_enable_gpio_wakeup() failed"));
+        }
+    }
+
     switch (wake_type) {
         case MACHINE_WAKE_SLEEP:
             esp_light_sleep_start();
