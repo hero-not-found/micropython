@@ -61,6 +61,7 @@ void usb_init(void) {
 void usb_usj_mode(void) {
     // Switch the USB PHY back to Serial/Jtag mode, disabling OTG support
     // This should be run before jumping to bootloader.
+    mp_usbd_deinit();
     usb_del_phy(phy_hdl);
     usb_phy_config_t phy_conf = {
         .controller = USB_PHY_CTRL_SERIAL_JTAG,
