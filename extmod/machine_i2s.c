@@ -83,6 +83,10 @@ enum {
     ARG_sck,
     ARG_ws,
     ARG_sd,
+    #if MICROPY_PY_MACHINE_I2S_FULL_DUPLEX
+    ARG_sdout,
+    ARG_sdin,
+    #endif
     #if MICROPY_PY_MACHINE_I2S_MCK
     ARG_mck,
     #endif
@@ -345,7 +349,11 @@ MP_NOINLINE static void machine_i2s_init_helper(machine_i2s_obj_t *self, size_t 
     static const mp_arg_t allowed_args[] = {
         { MP_QSTR_sck,      MP_ARG_KW_ONLY | MP_ARG_REQUIRED | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
         { MP_QSTR_ws,       MP_ARG_KW_ONLY | MP_ARG_REQUIRED | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
-        { MP_QSTR_sd,       MP_ARG_KW_ONLY | MP_ARG_REQUIRED | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+        { MP_QSTR_sd,       MP_ARG_KW_ONLY | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+        #if MICROPY_PY_MACHINE_I2S_FULL_DUPLEX
+        { MP_QSTR_sdout,    MP_ARG_KW_ONLY | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+        { MP_QSTR_sdin,     MP_ARG_KW_ONLY | MP_ARG_OBJ,   {.u_obj = MP_OBJ_NULL} },
+        #endif
         #if MICROPY_PY_MACHINE_I2S_MCK
         { MP_QSTR_mck,      MP_ARG_KW_ONLY | MP_ARG_OBJ,   {.u_obj = mp_const_none} },
         #endif
@@ -377,7 +385,12 @@ static void machine_i2s_print(const mp_print_t *print, mp_obj_t self_in, mp_prin
         self->i2s_id,
         mp_hal_pin_name(self->sck),
         mp_hal_pin_name(self->ws),
+        #if MICROPY_PY_MACHINE_I2S_FULL_DUPLEX
+        mp_hal_pin_name(self->sdout),
+        mp_hal_pin_name(self->sdin),
+        #else
         mp_hal_pin_name(self->sd),
+        #endif
         #if MICROPY_PY_MACHINE_I2S_MCK
         mp_hal_pin_name(self->mck),
         #endif
@@ -525,7 +538,7 @@ MP_DEFINE_CONST_DICT(machine_i2s_locals_dict, machine_i2s_locals_dict_table);
 static mp_uint_t machine_i2s_stream_read(mp_obj_t self_in, void *buf_in, mp_uint_t size, int *errcode) {
     machine_i2s_obj_t *self = MP_OBJ_TO_PTR(self_in);
 
-    if (self->mode != MICROPY_PY_MACHINE_I2S_CONSTANT_RX) {
+    if ((self->mode & MICROPY_PY_MACHINE_I2S_CONSTANT_RX) != MICROPY_PY_MACHINE_I2S_CONSTANT_RX) {
         *errcode = MP_EPERM;
         return MP_STREAM_ERROR;
     }
@@ -573,7 +586,7 @@ static mp_uint_t machine_i2s_stream_read(mp_obj_t self_in, void *buf_in, mp_uint
 static mp_uint_t machine_i2s_stream_write(mp_obj_t self_in, const void *buf_in, mp_uint_t size, int *errcode) {
     machine_i2s_obj_t *self = MP_OBJ_TO_PTR(self_in);
 
-    if (self->mode != MICROPY_PY_MACHINE_I2S_CONSTANT_TX) {
+    if ((self->mode & MICROPY_PY_MACHINE_I2S_CONSTANT_TX) != MICROPY_PY_MACHINE_I2S_CONSTANT_TX) {
         *errcode = MP_EPERM;
         return MP_STREAM_ERROR;
     }
@@ -623,7 +636,7 @@ static mp_uint_t machine_i2s_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_
         ret = 0;
 
         if (flags & MP_STREAM_POLL_RD) {
-            if (self->mode != MICROPY_PY_MACHINE_I2S_CONSTANT_RX) {
+            if ((self->mode & MICROPY_PY_MACHINE_I2S_CONSTANT_RX) != MICROPY_PY_MACHINE_I2S_CONSTANT_RX) {
                 *errcode = MP_EPERM;
                 return MP_STREAM_ERROR;
             }
@@ -633,14 +646,14 @@ static mp_uint_t machine_i2s_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_
                 ret |= MP_STREAM_POLL_RD;
             }
             #else
-            if (self->dma_buffer_status == DMA_MEMORY_NOT_EMPTY) {
+            if (self->dma_buffer_status_rx == DMA_MEMORY_NOT_EMPTY) {
                 ret |= MP_STREAM_POLL_RD;
             }
             #endif
         }
 
         if (flags & MP_STREAM_POLL_WR) {
-            if (self->mode != MICROPY_PY_MACHINE_I2S_CONSTANT_TX) {
+            if ((self->mode & MICROPY_PY_MACHINE_I2S_CONSTANT_TX) != MICROPY_PY_MACHINE_I2S_CONSTANT_TX) {
                 *errcode = MP_EPERM;
                 return MP_STREAM_ERROR;
             }
@@ -650,7 +663,7 @@ static mp_uint_t machine_i2s_ioctl(mp_obj_t self_in, mp_uint_t request, uintptr_
                 ret |= MP_STREAM_POLL_WR;
             }
             #else
-            if (self->dma_buffer_status == DMA_MEMORY_NOT_FULL) {
+            if (self->dma_buffer_status_tx == DMA_MEMORY_NOT_FULL) {
                 ret |= MP_STREAM_POLL_WR;
             }
             #endif

@@ -70,10 +70,12 @@ typedef enum {
 typedef struct _machine_i2s_obj_t {
     mp_obj_base_t base;
     i2s_port_t i2s_id;
-    i2s_chan_handle_t i2s_chan_handle;
+    i2s_chan_handle_t i2s_chan_handle_tx;
+    i2s_chan_handle_t i2s_chan_handle_rx;
     mp_hal_pin_obj_t sck;
     mp_hal_pin_obj_t ws;
-    mp_hal_pin_obj_t sd;
+    mp_hal_pin_obj_t sdout;
+    mp_hal_pin_obj_t sdin;
     i2s_dir_t mode;
     i2s_data_bit_width_t bits;
     format_t format;
@@ -85,7 +87,8 @@ typedef struct _machine_i2s_obj_t {
     uint8_t transform_buffer[SIZEOF_TRANSFORM_BUFFER_IN_BYTES];
     QueueHandle_t non_blocking_mode_queue;
     TaskHandle_t non_blocking_mode_task;
-    dma_buffer_status_t dma_buffer_status;
+    dma_buffer_status_t dma_buffer_status_tx;
+    dma_buffer_status_t dma_buffer_status_rx;
 } machine_i2s_obj_t;
 
 static mp_obj_t machine_i2s_deinit(mp_obj_t self_in);
@@ -98,6 +101,17 @@ static const int8_t i2s_frame_map[NUM_I2S_USER_FORMATS][I2S_RX_FRAME_SIZE_IN_BYT
     { 0,  1,  2,  3, -1, -1, -1, -1 },  // Mono, 32-bits
     { 2,  3,  6,  7, -1, -1, -1, -1 },  // Stereo, 16-bits
     { 0,  1,  2,  3,  4,  5,  6,  7 },  // Stereo, 32-bits
+};
+
+// TX always writes to DMA in 32-bit stereo format (8 bytes per frame)
+#define I2S_TX_FRAME_SIZE_IN_BYTES (8)
+
+// TX frame size mapping for each user format (bytes per frame in user format)
+static const uint8_t i2s_tx_user_frame_size[NUM_I2S_USER_FORMATS] = {
+    2,  // Mono, 16-bits: 2 bytes per sample
+    4,  // Mono, 32-bits: 4 bytes per sample  
+    4,  // Stereo, 16-bits: 2 bytes * 2 channels = 4 bytes per frame
+    8,  // Stereo, 32-bits: 4 bytes * 2 channels = 8 bytes per frame
 };
 
 void machine_i2s_init0() {
@@ -183,7 +197,7 @@ static uint32_t fill_appbuf_from_dma(machine_i2s_obj_t *self, mp_buffer_info_t *
         }
 
         esp_err_t ret = i2s_channel_read(
-            self->i2s_chan_handle,
+            self->i2s_chan_handle_rx,
             self->transform_buffer,
             num_bytes_requested_from_dma,
             &num_bytes_received_from_dma,
@@ -224,7 +238,7 @@ static uint32_t fill_appbuf_from_dma(machine_i2s_obj_t *self, mp_buffer_info_t *
 
         if ((self->io_mode == ASYNCIO) && (num_bytes_received_from_dma < num_bytes_requested_from_dma)) {
             // Unable to fill the entire app buffer from DMA memory.  This indicates all DMA RX buffers are empty.
-            self->dma_buffer_status = DMA_MEMORY_EMPTY;
+            self->dma_buffer_status_rx = DMA_MEMORY_EMPTY;
             break;
         }
     }
@@ -242,17 +256,95 @@ static size_t copy_appbuf_to_dma(machine_i2s_obj_t *self, mp_buffer_info_t *appb
         delay = portMAX_DELAY;  // block until supplied buffer is emptied
     }
 
-    esp_err_t ret = i2s_channel_write(self->i2s_chan_handle, appbuf->buf, appbuf->len, &num_bytes_written, delay);
+    // if we're in full duplex mode and format isn't stereo 32 bits, we need to transform the app buffer
+    if (self->mode & MICROPY_PY_MACHINE_I2S_CONSTANT_RX && 
+        (self->format != STEREO || self->bits != I2S_DATA_BIT_WIDTH_32BIT)) {
+        
+        // Transform the app buffer from the app buffer format to the DMA format (always 32 bit stereo).
+        // Process the app buffer in chunks using the transform buffer
+        
+        uint8_t f_index = get_frame_mapping_index(self->bits, self->format);
+        uint8_t user_frame_size = i2s_tx_user_frame_size[f_index];
+        uint32_t app_index = 0;
+        uint8_t *app_p = (uint8_t *)appbuf->buf;
+        
+        while (app_index < appbuf->len) {
+            // Calculate how many user frames can fit in the transform buffer
+            uint32_t frames_in_transform_buf = SIZEOF_TRANSFORM_BUFFER_IN_BYTES / I2S_TX_FRAME_SIZE_IN_BYTES;
+            uint32_t user_bytes_to_process = MIN(frames_in_transform_buf * user_frame_size, appbuf->len - app_index);
+            uint32_t frames_to_process = user_bytes_to_process / user_frame_size;
+            
+            // Transform user format frames to DMA format frames
+            for (uint32_t frame = 0; frame < frames_to_process; frame++) {
+                uint8_t *dma_frame = self->transform_buffer + (frame * I2S_TX_FRAME_SIZE_IN_BYTES);
+                uint8_t *user_frame = app_p + app_index + (frame * user_frame_size);
+                
+                // Initialize DMA frame to zero (clears right channel for mono)
+                memset(dma_frame, 0, I2S_TX_FRAME_SIZE_IN_BYTES);
+                
+                if (self->format == MONO) {
+                    if (self->bits == I2S_DATA_BIT_WIDTH_16BIT) {
+                        // Mono 16-bit: output to left channel only, pad to 32-bit
+                        int16_t sample = *((int16_t *)user_frame);
+                        *((int32_t *)&dma_frame[0]) = (int32_t)sample << 16;  // Left channel
+                        // Right channel stays zero from memset
+                    } else { // 32-bit
+                        // Mono 32-bit: output to left channel only
+                        int32_t sample = *((int32_t *)user_frame);
+                        *((int32_t *)&dma_frame[0]) = sample;  // Left channel
+                        // Right channel stays zero from memset
+                    }
+                } else { // STEREO
+                    if (self->bits == I2S_DATA_BIT_WIDTH_16BIT) {
+                        // Stereo 16-bit: pad each sample to 32-bit
+                        int16_t left_sample = *((int16_t *)&user_frame[0]);
+                        int16_t right_sample = *((int16_t *)&user_frame[2]);
+                        *((int32_t *)&dma_frame[0]) = (int32_t)left_sample << 16;   // Left channel
+                        *((int32_t *)&dma_frame[4]) = (int32_t)right_sample << 16;  // Right channel
+                    }
+                    // Note: Stereo 32-bit doesn't need transformation - it's already in DMA format
+                }
+            }
+            
+            // Write transformed data to DMA
+            size_t transform_bytes = frames_to_process * I2S_TX_FRAME_SIZE_IN_BYTES;
+            size_t bytes_written_chunk = 0;
+            
+            esp_err_t ret = i2s_channel_write(self->i2s_chan_handle_tx, self->transform_buffer, 
+                                            transform_bytes, &bytes_written_chunk, delay);
+            
+            if ((self->io_mode != ASYNCIO) ||
+                ((self->io_mode == ASYNCIO) && (ret != ESP_ERR_TIMEOUT))) {
+                check_esp_err(ret);
+            }
+            
+            // Calculate how many user bytes this represents
+            uint32_t dma_frames_written = bytes_written_chunk / I2S_TX_FRAME_SIZE_IN_BYTES;
+            uint32_t user_bytes_written = dma_frames_written * user_frame_size;
+            
+            num_bytes_written += user_bytes_written;
+            app_index += user_bytes_to_process;
+            
+            if ((self->io_mode == ASYNCIO) && (bytes_written_chunk < transform_bytes)) {
+                // Unable to empty the entire transform buffer into DMA memory
+                self->dma_buffer_status_tx = DMA_MEMORY_FULL;
+                break;
+            }
+        }
+    } else {
+        // No transformation needed - write directly to DMA
+        esp_err_t ret = i2s_channel_write(self->i2s_chan_handle_tx, appbuf->buf, appbuf->len, &num_bytes_written, delay);
 
-    // i2s_channel_write returns ESP_ERR_TIMEOUT when buffer cannot be emptied by the timeout delay.
-    if ((self->io_mode != ASYNCIO) ||
-        ((self->io_mode == ASYNCIO) && (ret != ESP_ERR_TIMEOUT))) {
-        check_esp_err(ret);
-    }
+        // i2s_channel_write returns ESP_ERR_TIMEOUT when buffer cannot be emptied by the timeout delay.
+        if ((self->io_mode != ASYNCIO) ||
+            ((self->io_mode == ASYNCIO) && (ret != ESP_ERR_TIMEOUT))) {
+            check_esp_err(ret);
+        }
 
-    if ((self->io_mode == ASYNCIO) && (num_bytes_written < appbuf->len)) {
-        // Unable to empty the entire app buffer into DMA memory.  This indicates all DMA TX buffers are full.
-        self->dma_buffer_status = DMA_MEMORY_FULL;
+        if ((self->io_mode == ASYNCIO) && (num_bytes_written < appbuf->len)) {
+            // Unable to empty the entire app buffer into DMA memory.  This indicates all DMA TX buffers are full.
+            self->dma_buffer_status_tx = DMA_MEMORY_FULL;
+        }
     }
 
     return num_bytes_written;
@@ -279,14 +371,14 @@ static void task_for_non_blocking_mode(void *self_in) {
 // callback indicating that a DMA buffer was just filled with samples received from an I2S port
 static IRAM_ATTR bool i2s_rx_recv_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *self_in) {
     machine_i2s_obj_t *self = (machine_i2s_obj_t *)self_in;
-    self->dma_buffer_status = DMA_MEMORY_NOT_EMPTY;
+    self->dma_buffer_status_rx = DMA_MEMORY_NOT_EMPTY;
     return false;
 }
 
 // callback indicating that samples in a DMA buffer were just transmitted to an I2S port
 static IRAM_ATTR bool i2s_tx_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *self_in) {
     machine_i2s_obj_t *self = (machine_i2s_obj_t *)self_in;
-    self->dma_buffer_status = DMA_MEMORY_NOT_FULL;
+    self->dma_buffer_status_tx = DMA_MEMORY_NOT_FULL;
     return false;
 }
 
@@ -310,10 +402,20 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
     int8_t ws = args[ARG_ws].u_obj == MP_OBJ_NULL ? -1 : machine_pin_get_id(args[ARG_ws].u_obj);
     int8_t sd = args[ARG_sd].u_obj == MP_OBJ_NULL ? -1 : machine_pin_get_id(args[ARG_sd].u_obj);
 
+    #if MICROPY_PY_MACHINE_I2S_FULL_DUPLEX
+    int8_t sdout = args[ARG_sdout].u_obj == MP_OBJ_NULL ? -1 : machine_pin_get_id(args[ARG_sdout].u_obj);
+    int8_t sdin = args[ARG_sdin].u_obj == MP_OBJ_NULL ? -1 : machine_pin_get_id(args[ARG_sdin].u_obj);
+    #else
+    int8_t sdout = -1;
+    int8_t sdin = -1;
+    #endif
+
+
     // is Mode valid?
     int8_t mode = args[ARG_mode].u_int;
     if ((mode != (MICROPY_PY_MACHINE_I2S_CONSTANT_RX)) &&
-        (mode != (MICROPY_PY_MACHINE_I2S_CONSTANT_TX))) {
+        (mode != (MICROPY_PY_MACHINE_I2S_CONSTANT_TX)) &&
+        (mode != (MICROPY_PY_MACHINE_I2S_CONSTANT_TX | MICROPY_PY_MACHINE_I2S_CONSTANT_RX))) {
         mp_raise_ValueError(MP_ERROR_TEXT("invalid mode"));
     }
 
@@ -331,6 +433,32 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
         mp_raise_ValueError(MP_ERROR_TEXT("invalid format"));
     }
 
+    if (mode == MICROPY_PY_MACHINE_I2S_CONSTANT_RX) {
+        if (sdin == -1 && sd == -1) {
+            mp_raise_ValueError(MP_ERROR_TEXT("sdin pin must be specified for RX mode"));
+        }
+        if (sdin == -1 && sd != -1) {
+            // use sd pin for sdin
+            sdin = sd;
+        }
+    }
+
+    if (mode == MICROPY_PY_MACHINE_I2S_CONSTANT_TX) {
+        if (sdout == -1 && sd == -1) {
+            mp_raise_ValueError(MP_ERROR_TEXT("sdout pin must be specified for TX mode"));
+        }
+        if (sdout == -1 && sd != -1) {
+            // use sd pin for sdout
+            sdout = sd;
+        }
+    }
+
+    if (mode == (MICROPY_PY_MACHINE_I2S_CONSTANT_TX | MICROPY_PY_MACHINE_I2S_CONSTANT_RX)) {
+        if (sdout == -1 || sdin == -1) {
+            mp_raise_ValueError(MP_ERROR_TEXT("sdout and sdin pins must be specified for full duplex mode"));
+        }
+    }
+
     // is Rate valid?
     // Not checked:  ESP-IDF I2S API does not indicate a valid range for sample rate
 
@@ -339,7 +467,8 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
 
     self->sck = sck;
     self->ws = ws;
-    self->sd = sd;
+    self->sdout = sdout;
+    self->sdin = sdin;
     self->mode = mode;
     self->bits = bits;
     self->format = format;
@@ -350,12 +479,11 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
     self->non_blocking_mode_task = NULL;
     self->io_mode = BLOCKING;
     self->is_deinit = false;
+    self->i2s_chan_handle_tx = NULL;
+    self->i2s_chan_handle_rx = NULL;
 
-    if (mode == MICROPY_PY_MACHINE_I2S_CONSTANT_TX) {
-        self->dma_buffer_status = DMA_MEMORY_NOT_FULL;
-    } else { // rx
-        self->dma_buffer_status = DMA_MEMORY_NOT_EMPTY;
-    }
+    self->dma_buffer_status_tx = DMA_MEMORY_NOT_FULL;
+    self->dma_buffer_status_rx = DMA_MEMORY_NOT_EMPTY;
 
     i2s_chan_config_t chan_config = I2S_CHANNEL_DEFAULT_CONFIG(self->i2s_id, I2S_ROLE_MASTER);
     chan_config.dma_desc_num = get_dma_buf_count(mode, bits, format, self->ibuf);
@@ -363,9 +491,14 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
     chan_config.auto_clear = true;
 
     if (mode == MICROPY_PY_MACHINE_I2S_CONSTANT_TX) {
-        check_esp_err(i2s_new_channel(&chan_config, &self->i2s_chan_handle, NULL));
-    } else { // rx
-        check_esp_err(i2s_new_channel(&chan_config, NULL, &self->i2s_chan_handle));
+        check_esp_err(i2s_new_channel(&chan_config, &self->i2s_chan_handle_tx, NULL));
+    } else if (mode == (MICROPY_PY_MACHINE_I2S_CONSTANT_RX)) {
+        check_esp_err(i2s_new_channel(&chan_config, NULL, &self->i2s_chan_handle_rx));
+    } else if (mode == (MICROPY_PY_MACHINE_I2S_CONSTANT_TX | MICROPY_PY_MACHINE_I2S_CONSTANT_RX)) {
+        // create a new channel for TX and RX
+        check_esp_err(i2s_new_channel(&chan_config, &self->i2s_chan_handle_tx, &self->i2s_chan_handle_rx));
+    } else {
+        mp_raise_ValueError(MP_ERROR_TEXT("invalid mode"));
     }
 
     i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(get_dma_bits(mode, bits), get_dma_format(mode, format));
@@ -378,6 +511,8 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
             .mclk = I2S_GPIO_UNUSED,
             .bclk = self->sck,
             .ws = self->ws,
+            .dout = sdout,
+            .din = sdin,
             .invert_flags = {
                 .mclk_inv = false,
                 .bclk_inv = false,
@@ -386,17 +521,16 @@ static void mp_machine_i2s_init_helper(machine_i2s_obj_t *self, mp_arg_val_t *ar
         },
     };
 
-    if (mode == MICROPY_PY_MACHINE_I2S_CONSTANT_TX) {
-        std_cfg.gpio_cfg.dout = self->sd;
-        std_cfg.gpio_cfg.din = I2S_GPIO_UNUSED;
-    } else { // rx
-        std_cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
-        std_cfg.gpio_cfg.din = self->sd;
+    if (self->i2s_chan_handle_tx) {
+        check_esp_err(i2s_channel_init_std_mode(self->i2s_chan_handle_tx, &std_cfg));
+        check_esp_err(i2s_channel_register_event_callback(self->i2s_chan_handle_tx, &i2s_callbacks, self));
+        check_esp_err(i2s_channel_enable(self->i2s_chan_handle_tx));
     }
-
-    check_esp_err(i2s_channel_init_std_mode(self->i2s_chan_handle, &std_cfg));
-    check_esp_err(i2s_channel_register_event_callback(self->i2s_chan_handle, &i2s_callbacks, self));
-    check_esp_err(i2s_channel_enable(self->i2s_chan_handle));
+    if (self->i2s_chan_handle_rx) {
+        check_esp_err(i2s_channel_init_std_mode(self->i2s_chan_handle_rx, &std_cfg));
+        check_esp_err(i2s_channel_register_event_callback(self->i2s_chan_handle_rx, &i2s_callbacks, self));
+        check_esp_err(i2s_channel_enable(self->i2s_chan_handle_rx));
+    }
 }
 
 static machine_i2s_obj_t *mp_machine_i2s_make_new_instance(mp_int_t i2s_id) {
@@ -419,11 +553,18 @@ static machine_i2s_obj_t *mp_machine_i2s_make_new_instance(mp_int_t i2s_id) {
 
 static void mp_machine_i2s_deinit(machine_i2s_obj_t *self) {
     if (!self->is_deinit) {
-        if (self->i2s_chan_handle) {
-            i2s_channel_disable(self->i2s_chan_handle);
-            i2s_channel_register_event_callback(self->i2s_chan_handle, &i2s_callbacks_null, self);
-            i2s_del_channel(self->i2s_chan_handle);
-            self->i2s_chan_handle = NULL;
+        if (self->i2s_chan_handle_tx) {
+            i2s_channel_disable(self->i2s_chan_handle_tx);
+            i2s_channel_register_event_callback(self->i2s_chan_handle_tx, &i2s_callbacks_null, self);
+            i2s_del_channel(self->i2s_chan_handle_tx);
+            self->i2s_chan_handle_tx = NULL;
+        }
+
+        if (self->i2s_chan_handle_rx) {
+            i2s_channel_disable(self->i2s_chan_handle_rx);
+            i2s_channel_register_event_callback(self->i2s_chan_handle_rx, &i2s_callbacks_null, self);
+            i2s_del_channel(self->i2s_chan_handle_rx);
+            self->i2s_chan_handle_rx = NULL;
         }
 
         if (self->non_blocking_mode_task != NULL) {
