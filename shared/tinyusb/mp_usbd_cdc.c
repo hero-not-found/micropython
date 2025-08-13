@@ -34,6 +34,14 @@
 
 #if MICROPY_HW_USB_CDC && MICROPY_HW_ENABLE_USBDEV && !MICROPY_EXCLUDE_SHARED_TINYUSB_USBD_CDC
 
+static volatile bool s_cdc_ready = false;
+
+static inline bool cdc_usable(void) {
+    return tud_cdc_connected() && s_cdc_ready;
+}
+
+void tud_suspend_cb(bool remote_wk){ (void)remote_wk; s_cdc_ready = false; }
+
 static uint8_t cdc_itf_pending; // keep track of cdc interfaces which need attention to poll
 static int8_t cdc_connected_flush_delay = 0;
 
@@ -60,7 +68,7 @@ uintptr_t mp_usbd_cdc_poll_interfaces(uintptr_t poll_flags) {
         ret |= MP_STREAM_POLL_RD;
     }
     if ((poll_flags & MP_STREAM_POLL_WR) &&
-        (!tud_cdc_connected() || (tud_cdc_connected() && tud_cdc_write_available() > 0))) {
+        (!cdc_usable() || (tud_cdc_connected() && tud_cdc_write_available() > 0))) {
         // Always allow write when not connected, fifo will retain latest.
         // When connected operate as blocking, only allow if space is available.
         ret |= MP_STREAM_POLL_WR;
@@ -98,12 +106,20 @@ mp_uint_t mp_usbd_cdc_tx_strn(const char *str, mp_uint_t len) {
     if (!tusb_inited()) {
         return 0;
     }
+
+    // If not usable, drop on the floor to keep the system responsive.
+    // Returning len tells callers "all bytes consumed" (non-blocking, no retry storms).
+    if (!cdc_usable()) {
+        return len;
+    }
+
     size_t i = 0;
     while (i < len) {
         uint32_t n = len - i;
         if (n > CFG_TUD_CDC_EP_BUFSIZE) {
             n = CFG_TUD_CDC_EP_BUFSIZE;
         }
+
         if (tud_cdc_connected()) {
             // If CDC port is connected but the buffer is full, wait for up to USC_CDC_TIMEOUT ms.
             mp_uint_t t0 = mp_hal_ticks_ms();
@@ -132,6 +148,7 @@ void tud_sof_cb(uint32_t frame_count) {
     if (--cdc_connected_flush_delay < 0) {
         // Finished on-connection delay, disable SOF interrupt again.
         tud_sof_cb_enable(false);
+        s_cdc_ready = true;
         tud_cdc_write_flush();
     }
 }
