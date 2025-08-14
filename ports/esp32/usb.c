@@ -59,6 +59,15 @@ void usb_init(void) {
 
 #if CONFIG_IDF_TARGET_ESP32S3
 void usb_usj_mode(void) {
+    // Ensure no pending static CDC writes, as these can cause TinyUSB to crash
+    tud_cdc_write_clear();
+    // Disconnect the USB device
+    tud_disconnect();
+    // Need to ensure a long enough delay before TinyUSB re-connects that
+    // the host triggers a bus reset. This may happen anyway, but delaying here
+    // lets us be "belt and braces" sure.
+    mp_hal_delay_ms(50);
+
     // Switch the USB PHY back to Serial/Jtag mode, disabling OTG support
     // This should be run before jumping to bootloader.
     usb_del_phy(phy_hdl);
