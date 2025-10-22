@@ -63,11 +63,16 @@
 #include "mdns.h"
 #endif
 
+#include "lwip/priv/sockets_priv.h"
+#include "lwip/api.h"
+extern struct lwip_sock sockets[];
+
 enum {
     SOCKET_STATE_NEW,
     SOCKET_STATE_CONNECTED,
     SOCKET_STATE_PEER_CLOSED,
 };
+
 
 typedef struct _socket_obj_t {
     mp_obj_base_t base;
@@ -993,11 +998,33 @@ static mp_obj_t esp_socket_initialize() {
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(esp_socket_initialize_obj, esp_socket_initialize);
 
+static mp_obj_t mp_lwip_list_sockets(void) {
+    mp_obj_t list = mp_obj_new_list(0, NULL);
+    for (int i = 0; i < NUM_SOCKETS; i++) {
+        struct lwip_sock *s = &sockets[i];
+        if (s->conn) {
+            mp_obj_t tuple[7] = {
+                mp_obj_new_int(i),
+                mp_obj_new_int(s->conn->type),
+                mp_obj_new_int(s->conn->state),
+                mp_obj_new_int(s->rcvevent),
+                mp_obj_new_int(s->sendevent),
+                mp_obj_new_int(s->fd_used),
+                mp_obj_new_int(s->fd_free_pending),
+            };
+            mp_obj_list_append(list, mp_obj_new_tuple(7, tuple));
+        }
+    }
+    return list;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(mp_lwip_list_sockets_obj, mp_lwip_list_sockets);
+
 static const mp_rom_map_elem_t mp_module_socket_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_socket) },
     { MP_ROM_QSTR(MP_QSTR___init__), MP_ROM_PTR(&esp_socket_initialize_obj) },
     { MP_ROM_QSTR(MP_QSTR_socket), MP_ROM_PTR(&socket_type) },
     { MP_ROM_QSTR(MP_QSTR_getaddrinfo), MP_ROM_PTR(&esp_socket_getaddrinfo_obj) },
+    { MP_ROM_QSTR(MP_QSTR_list_sockets), MP_ROM_PTR(&mp_lwip_list_sockets_obj) },
 
     { MP_ROM_QSTR(MP_QSTR_AF_INET), MP_ROM_INT(AF_INET) },
     { MP_ROM_QSTR(MP_QSTR_AF_INET6), MP_ROM_INT(AF_INET6) },
