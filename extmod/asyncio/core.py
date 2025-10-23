@@ -111,24 +111,60 @@ class IOQueue:
                 break
 
     def wait_io_event(self, dt):
-        for s, ev in self.poller.ipoll(dt):
-            sm = self.map[id(s)]
-            # print('poll', s, sm, ev)
-            if ev & ~select.POLLOUT and sm[0] is not None:
-                # POLLIN or error
-                _task_queue.push(sm[0])
-                sm[0] = None
-            if ev & ~select.POLLIN and sm[1] is not None:
-                # POLLOUT or error
-                _task_queue.push(sm[1])
-                sm[1] = None
-            if sm[0] is None and sm[1] is None:
-                self._dequeue(s)
-            elif sm[0] is None:
-                self.poller.modify(s, select.POLLOUT)
-            else:
-                self.poller.modify(s, select.POLLIN)
-
+        try:
+            for s, ev in self.poller.ipoll(dt):
+                sock_id = id(s)
+                sm = self.map.get(sock_id)  # Faster than checking membership first
+                
+                if sm is None:
+                    # Orphaned socket - rare, clean up
+                    try:
+                        self.poller.unregister(s)
+                    except:
+                        pass
+                    continue
+                
+                # Fast path - no try/except here for performance
+                # Process events
+                if ev & ~select.POLLOUT and sm[0] is not None:
+                    _task_queue.push(sm[0])
+                    sm[0] = None
+                if ev & ~select.POLLIN and sm[1] is not None:
+                    _task_queue.push(sm[1])
+                    sm[1] = None
+                
+                # Clean up if no more tasks
+                if sm[0] is None and sm[1] is None:
+                    self._dequeue(s)
+                elif sm[0] is None:
+                    self.poller.modify(s, select.POLLOUT)
+                else:
+                    self.poller.modify(s, select.POLLIN)
+            
+        except OSError as exc:
+            if exc.args and exc.args[0] == 5:  # EIO
+                print(f"[IOQUEUE] EIO - rebuilding poller")
+                
+                # Rebuild poller
+                old_map = dict(self.map)
+                self.poller = select.poll()
+                self.map = {}
+                
+                # Re-register valid sockets
+                for sock_id, (r_task, w_task, sock) in old_map.items():
+                    try:
+                        if sock.fileno() >= 0:
+                            self.map[sock_id] = [r_task, w_task, sock]
+                            if r_task and w_task:
+                                self.poller.register(sock, select.POLLIN | select.POLLOUT)
+                            elif r_task:
+                                self.poller.register(sock, select.POLLIN)
+                            elif w_task:
+                                self.poller.register(sock, select.POLLOUT)
+                    except:
+                        pass
+                return
+            raise
 
 ################################################################################
 # Main run loop
