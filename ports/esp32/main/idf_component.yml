@@ -12,5 +12,4 @@ dependencies:
     - if: idf_version >=5.3
   idf:
     version: '>=5.2.0'
-  espressif/thorvg: ^0.15.15
   espressif/esp_image_effects: ^1.0.1
