@@ -194,6 +194,7 @@ list(APPEND IDF_COMPONENTS
     ulp
     usb
     vfs
+    espressif__esp-dsp
 )
 
 # Provide the default LD fragment if not set
