@@ -1,4 +1,14 @@
 dependencies:
+  espressif/esp_image_effects:
+    component_hash: a35037db02862d3cef6f72c25f422ae62da6e6c88219ce03c9ea24e0315ceaaa
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.1
   espressif/mdns:
     component_hash: 46ee81d32fbf850462d8af1e83303389602f6a6a9eddd2a55104cb4c063858ed
     dependencies:
@@ -29,9 +39,10 @@ dependencies:
       type: idf
     version: 5.5.1
 direct_dependencies:
+- espressif/esp_image_effects
 - espressif/mdns
 - espressif/tinyusb
 - idf
-manifest_hash: 482087bc40f0e187795a9ef9ad08ef15a585b4cdabc296c715a9d19284622150
+manifest_hash: 41fba5cd050c99c9c4aad54b95d67cab6368b0c4fbc5aee07bc5aef26a5cd533
 target: esp32s3
 version: 2.0.0
