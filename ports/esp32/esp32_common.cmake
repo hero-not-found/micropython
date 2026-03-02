@@ -130,6 +130,7 @@ list(APPEND MICROPY_SOURCE_PORT
     network_lan.c
     network_ppp.c
     network_wlan.c
+    network_usbh_modem.c
     mpnimbleport.c
     modsocket.c
     lwip_patch.c
@@ -270,6 +271,12 @@ target_compile_options(${MICROPY_TARGET} PUBLIC
 # Additional include directories needed for private NimBLE headers.
 target_include_directories(${MICROPY_TARGET} PUBLIC
     ${IDF_PATH}/components/bt/host/nimble/nimble
+)
+
+# USB Host Modem needs CDC and modem_at include paths
+target_include_directories(${MICROPY_TARGET} PUBLIC
+    ${MICROPY_PORT_DIR}/managed_components/espressif__iot_usbh_cdc/include
+    ${MICROPY_PORT_DIR}/managed_components/espressif__modem_at/include
 )
 
 # Add additional extmod and usermod components.
