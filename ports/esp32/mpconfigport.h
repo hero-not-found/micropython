@@ -85,8 +85,12 @@
 #define MICROPY_PY_THREAD_GIL               (1)
 #define MICROPY_PY_THREAD_GIL_VM_DIVISOR    (32)
 
+#ifndef MICROPY_GC_SPLIT_HEAP
 #define MICROPY_GC_SPLIT_HEAP               (1)
+#endif
+#ifndef MICROPY_GC_SPLIT_HEAP_AUTO
 #define MICROPY_GC_SPLIT_HEAP_AUTO          (1)
+#endif
 
 // extended modules
 #ifndef MICROPY_PY_ESPNOW
