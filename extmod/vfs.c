@@ -36,6 +36,7 @@
 
 #if MICROPY_VFS_FAT
 #include "extmod/vfs_fat.h"
+#include "extmod/vfs_fat_native.h"
 #endif
 
 #if MICROPY_VFS_LFS1 || MICROPY_VFS_LFS2
@@ -280,22 +281,36 @@ mp_obj_t mp_vfs_mount(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args
     }
     *vfsp = vfs;
 
+    #if MICROPY_VFS_FAT
+    int native_fat_err = mp_native_fat_vfs_register(vfs);
+    if (native_fat_err != 0) {
+        *vfsp = vfs->next;
+        nlr_buf_t nlr;
+        if (nlr_push(&nlr) == 0) {
+            mp_vfs_proxy_call(vfs, MP_QSTR_umount, 0, NULL);
+            nlr_pop();
+        }
+        mp_raise_OSError(-native_fat_err);
+    }
+    #endif
+
     return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_KW(mp_vfs_mount_obj, 0, mp_vfs_mount);
 
 mp_obj_t mp_vfs_umount(mp_obj_t mnt_in) {
     // remove vfs from the mount table
+    mp_vfs_mount_t **vfsp = NULL;
     mp_vfs_mount_t *vfs = NULL;
     size_t mnt_len;
     const char *mnt_str = NULL;
     if (mp_obj_is_str(mnt_in)) {
         mnt_str = mp_obj_str_get_data(mnt_in, &mnt_len);
     }
-    for (mp_vfs_mount_t **vfsp = &MP_STATE_VM(vfs_mount_table); *vfsp != NULL; vfsp = &(*vfsp)->next) {
-        if ((mnt_str != NULL && mnt_len == (*vfsp)->len && !memcmp(mnt_str, (*vfsp)->str, mnt_len)) || (*vfsp)->obj == mnt_in) {
-            vfs = *vfsp;
-            *vfsp = (*vfsp)->next;
+    for (mp_vfs_mount_t **iter = &MP_STATE_VM(vfs_mount_table); *iter != NULL; iter = &(*iter)->next) {
+        if ((mnt_str != NULL && mnt_len == (*iter)->len && !memcmp(mnt_str, (*iter)->str, mnt_len)) || (*iter)->obj == mnt_in) {
+            vfs = *iter;
+            vfsp = iter;
             break;
         }
     }
@@ -304,13 +319,35 @@ mp_obj_t mp_vfs_umount(mp_obj_t mnt_in) {
         mp_raise_OSError(MP_EINVAL);
     }
 
+    #if MICROPY_VFS_FAT
+    int native_fat_err = mp_native_fat_vfs_pre_umount(vfs);
+    if (native_fat_err != 0) {
+        mp_raise_OSError(-native_fat_err);
+    }
+    #endif
+
+    // call the underlying object to do any unmounting operation
+    nlr_buf_t nlr;
+    if (nlr_push(&nlr) == 0) {
+        mp_vfs_proxy_call(vfs, MP_QSTR_umount, 0, NULL);
+        nlr_pop();
+    } else {
+        #if MICROPY_VFS_FAT
+        mp_native_fat_vfs_cancel_umount(vfs);
+        #endif
+        nlr_jump(nlr.ret_val);
+    }
+
+    *vfsp = vfs->next;
+
     // if we unmounted the current device then set current to root
     if (MP_STATE_VM(vfs_cur) == vfs) {
         MP_STATE_VM(vfs_cur) = MP_VFS_ROOT;
     }
 
-    // call the underlying object to do any unmounting operation
-    mp_vfs_proxy_call(vfs, MP_QSTR_umount, 0, NULL);
+    #if MICROPY_VFS_FAT
+    mp_native_fat_vfs_unregister(vfs);
+    #endif
 
     return mp_const_none;
 }

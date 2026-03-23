@@ -27,8 +27,37 @@
  */
 
 #include <sys/time.h>
+#include "py/mpthread.h"
 #include "lib/oofatfs/ff.h"
 #include "shared/timeutils/timeutils.h"
+
+#if FF_FS_REENTRANT
+int ff_cre_syncobj(FATFS *fatfs, FF_SYNC_t *sobj) {
+    (void)fatfs;
+    mp_thread_mutex_init(sobj);
+    return (int)(sobj->handle != NULL);
+}
+
+int ff_del_syncobj(FF_SYNC_t sobj) {
+    if (sobj.handle != NULL) {
+        vSemaphoreDelete(sobj.handle);
+    }
+    return 1;
+}
+
+int ff_req_grant(FF_SYNC_t sobj) {
+    if (sobj.handle == NULL) {
+        return 0;
+    }
+    return (int)(xSemaphoreTake(sobj.handle, FF_FS_TIMEOUT) == pdTRUE);
+}
+
+void ff_rel_grant(FF_SYNC_t sobj) {
+    if (sobj.handle != NULL) {
+        xSemaphoreGive(sobj.handle);
+    }
+}
+#endif
 
 DWORD get_fattime(void) {
     struct timeval tv;

@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "driver/i2s_std.h"
 #include "esp_wifi_types.h"
+#include "mpthreadport.h"
 
 #ifndef MICROPY_CONFIG_ROM_LEVEL
 #define MICROPY_CONFIG_ROM_LEVEL            (MICROPY_CONFIG_ROM_LEVEL_EXTRA_FEATURES)
@@ -208,10 +209,13 @@
 #endif
 
 // fatfs configuration
-#define MICROPY_FATFS_ENABLE_LFN            (1)
+#define MICROPY_FATFS_ENABLE_LFN            (2)
 #define MICROPY_FATFS_RPATH                 (2)
 #define MICROPY_FATFS_MAX_SS                (4096)
 #define MICROPY_FATFS_LFN_CODE_PAGE         437 /* 1=SFN/ANSI 437=LFN/U.S.(OEM) */
+#define MICROPY_FATFS_REENTRANT             (1)
+#define MICROPY_FATFS_TIMEOUT               (pdMS_TO_TICKS(1000))
+#define MICROPY_FATFS_SYNC_T                mp_thread_mutex_t
 
 // task size
 #ifndef MICROPY_TASK_STACK_SIZE
