@@ -1,6 +1,13 @@
 ## IDF Component Manager Manifest File
 dependencies:
   espressif/mdns: ~1.1.0
+  espressif/gmf_audio: ^0.8.0
+  espressif/gmf_io: ^0.8.0
+  espressif/esp_audio_render: ^0.8.0
+  espressif/gmf_ai_audio:
+    version: ~0.8.0
+    rules:
+    - if: target in [esp32, esp32s3, esp32p4]
   espressif/esp_tinyusb:
     rules:
     - if: target in [esp32s2, esp32s3]
