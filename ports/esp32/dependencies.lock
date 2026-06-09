@@ -1,6 +1,16 @@
 dependencies:
+  espressif/cmake_utilities:
+    component_hash: 05165f30922b422b4b90c08845e6d449329b97370fbd06309803d8cb539d79e3
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.1'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.1
   espressif/dl_fft:
-    component_hash: 7dadbd644c0d7ba4733cc3726ec4cff6edf27b043725e1115861dec1609a3d28
+    component_hash: ced3cf28cc70452b7859c06f4e5059215167254a2047e34c893d6f501ccd6ea2
     dependencies:
     - name: idf
       require: private
@@ -8,7 +18,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.3.1
+    version: 0.4.0
   espressif/esp-dsp:
     component_hash: 619639efc18cfa361a9e423739b9b0ffc14991effc6c027f955c2f2c3bf1754b
     dependencies:
@@ -137,12 +147,12 @@ dependencies:
       type: service
     version: 0.8.0
   espressif/gmf_core:
-    component_hash: 3ad2289200a2ae858cf14965807cdfd7da58ad9eebfaa6f4f22bb05812b83a75
+    component_hash: 6e11017fc41cdb19a8035e334c9e9caced803d67547fb0e60f69cba5fd735f6a
     dependencies: []
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.8.1
+    version: 0.8.4
   espressif/gmf_io:
     component_hash: ac185ae5bb5f4dc777a361fa45f73c96fdebd315905a8e8a3bc8067c80452887
     dependencies:
@@ -158,6 +168,64 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 0.8.0
+  espressif/iot_eth:
+    component_hash: 2375af94aa38438e1411a8158ceda74e89170aa5b5b502371acdef4151be2a05
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.0
+  espressif/iot_usbh_cdc:
+    component_hash: 6b30e8eeef1a3320a3bc0c27980c62826ed134b681be6f424366f3d78c291814
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.1'
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    version: 3.0.0
+  espressif/iot_usbh_rndis:
+    component_hash: 0d91d9c79980fe0d2b59ecae9341d91852b7eb3356cc0e708f76425a3604ff5b
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - name: espressif/iot_eth
+      registry_url: https://components.espressif.com
+      require: public
+      version: '*'
+    - name: espressif/iot_usbh_cdc
+      registry_url: https://components.espressif.com
+      require: public
+      version: ^3.0
+    - name: idf
+      require: private
+      version: '>=5.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    version: 0.3.1
   espressif/mdns:
     component_hash: 46ee81d32fbf850462d8af1e83303389602f6a6a9eddd2a55104cb4c063858ed
     dependencies:
@@ -196,8 +264,9 @@ direct_dependencies:
 - espressif/gmf_ai_audio
 - espressif/gmf_audio
 - espressif/gmf_io
+- espressif/iot_usbh_rndis
 - espressif/mdns
 - idf
-manifest_hash: 5830dc5fc59568dabb0fbfd3cff73365563bda5bd0208efe56bb03108b381a0b
+manifest_hash: aa3cd7662c154fc09b15311091f3173e0bf4132a46cef7968df4a5a1cecda6b1
 target: esp32s3
 version: 2.0.0

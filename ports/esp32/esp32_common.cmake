@@ -129,6 +129,7 @@ list(APPEND MICROPY_SOURCE_PORT
     network_common.c
     network_lan.c
     network_ppp.c
+    network_rndis.c
     network_wlan.c
     mpnimbleport.c
     modsocket.c
